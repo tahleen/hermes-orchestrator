@@ -16,6 +16,10 @@ You coordinate multi-agent development pipelines. You NEVER implement code direc
 
 - **Hermes agents** (Research, Planning, Documentation, Infrastructure): `delegate_task(goal, context, toolsets)`
 - **OpenCode agents** (Implementation, Quality): `${HERMES_HOME}/scripts/opencode-agent.sh <build|plan> "<prompt>" <workdir> [--no-explore] [--code-snippet "..."]`
+- **Graph agent** (optional Step 0): @graphify — build/query knowledge graph via `graphify query "..."` or `graphify extract . --backend deepseek...`
+
+## Optional Step 0: @graphify
+Before any pipeline, you may optionally run `@graphify` to build or query a knowledge graph. This accelerates @finder by providing a pre-built map of the codebase (659 nodes, 51 communities, god nodes). Load the skill with `skill_view(name='agents/graphify')`.
 
 ## How to Invoke
 Say what you need in natural language, and the orchestrator will:
@@ -239,10 +243,32 @@ When two agents disagree, use this priority (highest first):
 
 ---
 
+## Reference Files
+
+These files are in the skill's `references/` directory — load them with `skill_view(name='orchestrator', file_path='references/<file>.md')`:
+
+| File | Content |
+|------|---------|
+| `references/opencode-timeouts.md` | Verified timeout values, context injection pattern, build vs plan modes |
+| `references/sqlmodel-migration.md` | SQLModel migration patterns, raw SQL position safety, the `flagged` pattern |
+| `references/security-audit-checklist.md` | Full security audit checklist for @security agent |
+| `references/graphify-integration.md` | Knowledge graph integration for @finder speedup (71.5× token reduction) |
+| `references/worked-examples.md` | Full transcripts of completed pipeline runs on budget-app |
+
+## QMD Knowledge Collection (optional)
+
+A searchable QMD collection `orchestrator-knowledge` is set up with all skills, agent prompts, execution patterns, and the Hermes+OpenCode developer guide indexed (20 files, 54 chunks, embeddings active).
+
+Query it during a session when you need to quickly retrieve a specific pattern, timeout value, or past finding:
+```bash
+qmd query "<question>" --collection orchestrator-knowledge
+```
+
 ## Agent Summary
 
 | Agent | Engine | Model | Toolsets |
 |---|---|---|---|
+| @graphify | terminal (graphify CLI) | deepseek-v4-flash | [terminal] |
 | @finder | delegate_task | deepseek-v4-flash | [terminal, file] |
 | @analyst | delegate_task | deepseek-v4-pro | [terminal, file] |
 | @researcher | delegate_task | deepseek-v4-flash | [web, terminal] |
@@ -266,8 +292,46 @@ When two agents disagree, use this priority (highest first):
 ### @architect may merge @planner + @coder
 When the implementation is straightforward (deterministic translation of the design into code, < 100 lines), the `@architect` subagent often produces **working code directly** alongside the design spec. This is acceptable — it saves a round-trip. Apply the `@reviewer` quality gate even more carefully in this case since the design and implementation came from the same agent.
 
+### QMD knowledge collection setup
+When building a reusable knowledge base for a project/system:
+1. Collect all SKILL.md files, docs, and reference materials
+2. Create a QMD collection pointing to the directory (`qmd collection add <name> <path>`)
+3. Run `qmd embed -c <name>` to generate vector embeddings
+4. Add a "QMD Knowledge Collection" section to the main skill with query examples
+5. This enables full-text + semantic search across all project knowledge at ~2s query time
+
+### Graphify knowledge graph (optional @finder accelerator)
+When @finder is the bottleneck and the project has enough structure to benefit from graph analysis:
+1. Install: `pip install graphifyy && uv tool install graphifyy --with openai`
+2. Build: `DEEPSEEK_API_KEY=*** extract . --backend deepseek --model deepseek-chat`
+3. Report: `graphify cluster-only .`
+4. Cost: ~$0.01 for a 66-file project via DeepSeek
+5. Output: graph.json (659 nodes, 1587 edges for a medium app), GRAPH_REPORT.md, graph.html
+6. Use: `graphify query "<question>"` to retrieve specific relationships instead of reading all files
+7. Subsequent updates: `graphify update .` (changed files only, no LLM cost)
+8. See `skill_view(name='orchestrator', file_path='references/graphify-integration.md')` for full details
+
+### GitHub repo creation via API (no gh CLI)
+When `gh auth` fails (missing scopes), create repos via the REST API:
+```bash
+TOKEN=*** ~/.git-credentials | sed 's/.*://;s/@.*//')
+curl -s -X POST \
+  -H "Authorization: token $TOKEN" \
+  -H "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/user/repos \
+  -d '{"name": "<repo-name>", "private": false, "auto_init": false}'
+```
+Then `git init`, `git add -A`, `git commit`, `git remote add origin git@github.com:<user>/<repo>.git`, `git push -u origin main`.
+
+### Extracting agent skills from a monolithic orchestrator
+When an orchestrator skill grows too large (prompt templates mixed with pipeline logic):
+1. Create `~/.hermes/skills/agents/<name>/SKILL.md` for each agent
+2. Each skill gets: YAML frontmatter (name, description, tags, model), role section, execution section (delegate_task or OpenCode), prompt template, expected output format, when-to-use, model recommendation
+3. Update the orchestrator skill: replace long prompt-template sections with a compact reference table listing `skill_view(name='agents/<name>')`
+4. Keep pipeline definitions, rules, execution patterns, and pitfalls in the orchestrator
+5. Push to GitHub repo if applicable
+
 ### Component extraction: Approach C (grouped callbacks)
-When extracting an inline render block (>100 lines) into a separate React component:
 1. Group all state setters and side-effect handlers into a `Callbacks` interface object
 2. Pass the object as a single `callbacks` prop (reduces prop count ~50%)
 3. Use `React.memo` with a custom comparator that only re-renders when the item's own data prop changes
@@ -319,7 +383,7 @@ When tsc reports a type mismatch:
 4. If backend genuinely doesn't return it → **data bug**, fix the backend
 5. Always check both before deciding where the fix goes
 
-## Run Patterns (from 5 validated pipelines)
+## Run Patterns (from 7 validated pipelines)
 
 ### Real-world timings
 | Pipeline | Steps | Duration | Notes |
@@ -329,6 +393,9 @@ When tsc reports a type mismatch:
 | New Feature | @finder → @analyst → @architect → @coder → @reviewer → @tester | ~232s | Longest (@analyst+@architect with v4-pro) |
 | New Feature Secure | +@researcher +@security | ~285s | Additional security research + audit |
 | Performance | @finder → @analyst → @optimizer → @reviewer → @tester | ~175s | Mechanical transformations (fast) |
+| Refactoring | @finder → @analyst → @refactorer → @reviewer → @tester | ~285s | Component extraction (245→334 lines), approach C |
+| Infrastructure | @finder → @devops → @tester | ~85s | Docker multi-stage + compose, fast mechanical files |
+| Graphify build | graphify extract + cluster-only | ~210s | 66 files, 659 nodes, ~$0.01 DeepSeek |
 
 ### Bottlenecks observed
 - **@finder** is consistently the slowest step (43-88s) — it reads many files. This is the price of understanding the codebase.
