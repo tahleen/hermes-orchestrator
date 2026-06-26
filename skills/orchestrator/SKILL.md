@@ -194,9 +194,32 @@ Same as New Feature but with two additions:
 
 ---
 
-## Revision Loops — Universal Rules
+## Standard Step 0: @graphify (automatic)
 
-### Quality Gates (MANDATORY — never skip)
+**Before every pipeline**, check if a knowledge graph exists. If yes, use it to accelerate @finder:
+
+```python
+# Query the graph for the task context
+grep_result = terminal("ls graphify-out/graph.json 2>/dev/null && echo EXISTS || echo MISSING")
+if "EXISTS" in grep_result:
+    graph_insights = terminal("graphify query \"<task-specific question>\" --budget 1000 2>/dev/null")
+    # Pass graph_insights as context to @finder
+```
+
+**What @graphify provides to @finder:**
+- File paths relevant to the task (from graph traversal)
+- God nodes (core abstractions to explore)
+- Known communities (which modules to focus on)
+- ~5s instead of 43-88s of blind file scanning
+
+### When to skip @graphify
+- Small codebase (< 10 files) — @finder is fast enough
+- Graph is stale (code changed since last build) — rebuild or skip
+- No Graphify installed — `pip install graphifyy` or skip
+
+---
+
+## Revision Loops — Universal Rules
 Every single code change MUST pass @reviewer then @tester before being accepted.
 
 ### Max 3 Iterations
